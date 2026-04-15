@@ -4,6 +4,12 @@
 .latte/
 .turbo/
 .pnpm-store/
+.trunk/actions
+.trunk/logs
+.trunk/notifications
+.trunk/out
+.trunk/plugins
+.trunk/tools
 node_modules/
 dist/
 coverage/
