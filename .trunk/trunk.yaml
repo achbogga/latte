@@ -1,0 +1,13 @@
+version: 0.1
+cli:
+  version: 1.25.0
+lint:
+  enabled:
+    - eslint
+    - markdownlint
+    - prettier
+    - trivy
+    - yamllint
+actions:
+  enabled:
+    - trunk-announce

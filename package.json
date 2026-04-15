@@ -1,0 +1,49 @@
+{
+  "name": "latte",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Managed agentic harness for Codex CLI and Claude Code.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "vitest run",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "commitlint": "commitlint --edit",
+    "prepare": "simple-git-hooks"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.1.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.9.1",
+    "@vitest/coverage-v8": "^3.2.4",
+    "commitlint": "^20.1.0",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "markdownlint-cli": "^0.45.0",
+    "prettier": "^3.6.2",
+    "simple-git-hooks": "^2.13.1",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vitest": "^3.2.4",
+    "yaml": "^2.8.1"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec trunk check --all --no-progress",
+    "commit-msg": "pnpm commitlint --edit $1"
+  }
+}

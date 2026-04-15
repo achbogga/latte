@@ -1,0 +1,25 @@
+{
+  "name": "@achbogga/latte-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "latte": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --tsconfig ../../tsconfig.base.json",
+    "dev": "tsup src/index.ts --watch --format esm --dts",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --project ../../tsconfig.base.json --noEmit"
+  },
+  "dependencies": {
+    "@achbogga/latte-core": "workspace:*",
+    "@achbogga/latte-provider-claude": "workspace:*",
+    "@achbogga/latte-provider-codex": "workspace:*",
+    "commander": "^14.0.2"
+  }
+}

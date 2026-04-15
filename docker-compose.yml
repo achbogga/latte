@@ -1,0 +1,70 @@
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm
+    working_dir: /workspace/latte
+    command: sleep infinity
+    volumes:
+      - .:/workspace/latte
+      - pnpm-store:/home/node/.local/share/pnpm/store
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/latte
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - temporal
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: latte
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    depends_on:
+      - postgres
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: postgres
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.39.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:
+  pnpm-store:
+  qdrant-data:

@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@achbogga/latte-core": ["./packages/core/src/index.ts"],
+      "@achbogga/latte-provider-claude": [
+        "./packages/provider-claude/src/index.ts"
+      ],
+      "@achbogga/latte-provider-codex": [
+        "./packages/provider-codex/src/index.ts"
+      ]
+    }
+  },
+  "include": ["packages/**/*.ts", "services/**/*.ts", "tests/**/*.ts", "*.ts"]
+}

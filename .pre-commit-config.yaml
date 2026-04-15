@@ -1,0 +1,14 @@
+repos:
+  - repo: local
+    hooks:
+      - id: trunk-check
+        name: trunk check
+        entry: trunk check --all --no-progress
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: commitlint
+        name: commitlint
+        entry: pnpm commitlint
+        language: system
+        stages: [commit-msg]
