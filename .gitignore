@@ -15,6 +15,5 @@ dist/
 coverage/
 .idea/
 .vscode/
-pnpm-lock.yaml
 services/api/.data/
 services/worker/.runtime/
