@@ -42,8 +42,29 @@ pnpm --filter @achbogga/latte-cli exec latte init --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte index --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte brief --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte run --project /path/to/repo --provider codex --dry-run -- "fix flaky tests"
+pnpm --filter @achbogga/latte-cli exec latte agent start --project /path/to/repo
+pnpm --filter @achbogga/latte-cli exec latte agent console --project /path/to/repo
+pnpm --filter @achbogga/latte-cli exec latte agent submit --project /path/to/repo -- "continue the current task with this new constraint"
 pnpm --filter @achbogga/latte-cli exec latte stress plan
 ```
+
+## Background Loop
+
+Latte now supports a file-backed local daemon that keeps running in the
+background while you supervise it from a separate terminal.
+
+- `latte agent start` launches the daemon if one is not already healthy.
+- `latte agent console` opens an interactive supervision terminal without
+  stopping the loop.
+- `latte agent submit` queues new work for the background loop.
+- `latte agent pause`, `resume`, and `stop` control the daemon safely.
+- Runtime state lives under `.latte/agent/` and long-lived run artifacts live
+  under `.latte/runs/`.
+
+The daemon is resource-aware on the local machine. It samples system load,
+memory headroom, and peer Latte daemons before starting new work, and it
+requeues failed tasks with backoff so sessions recover from transient failures
+instead of silently dying.
 
 ## Repo Layout
 

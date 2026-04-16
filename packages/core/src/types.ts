@@ -94,6 +94,154 @@ export interface LaunchPlan {
   session: SessionRecord;
 }
 
+export type AgentDaemonStatus =
+  | "backing_off"
+  | "idle"
+  | "paused"
+  | "running"
+  | "starting"
+  | "stopped"
+  | "stopping";
+
+export type AgentTaskStatus =
+  | "cancelled"
+  | "completed"
+  | "failed"
+  | "queued"
+  | "running";
+
+export interface AgentResourcePolicy {
+  heartbeatTtlMs: number;
+  maxPeerAgents: number;
+  maxRetryBackoffMs: number;
+  maxTaskAttempts: number;
+  maxTrackedEvents: number;
+  maxTrackedFinishedTasks: number;
+  minFreeMemoryRatio: number;
+  peerLoadPenalty: number;
+  pollIntervalMs: number;
+  retryBackoffMs: number;
+  softLoadPerCpu: number;
+}
+
+export interface AgentResourceSnapshot {
+  cpuCount: number;
+  freeMemoryBytes: number;
+  freeMemoryRatio: number;
+  load15: number;
+  load1: number;
+  load5: number;
+  peerAgentCount: number;
+  sampledAt: string;
+}
+
+export interface AgentResourceAssessment {
+  allowed: boolean;
+  reasons: string[];
+}
+
+export interface AgentTask {
+  attempts: number;
+  completedAt?: string | undefined;
+  createdAt: string;
+  id: string;
+  lastError?: string | undefined;
+  lastExitCode?: number | null | undefined;
+  logPath?: string | undefined;
+  nextAttemptAt: string;
+  outputPath?: string | undefined;
+  passthroughArgs: string[];
+  priority: number;
+  prompt: string;
+  provider: ProviderName;
+  runPath?: string | undefined;
+  sessionId?: string | undefined;
+  startedAt?: string | undefined;
+  status: AgentTaskStatus;
+  updatedAt: string;
+}
+
+export interface AgentActiveRun {
+  command: string[];
+  exitPath: string;
+  logPath: string;
+  outputPath: string;
+  pid: number;
+  promptPath: string;
+  runPath: string;
+  sessionId: string;
+  startedAt: string;
+  taskId: string;
+}
+
+export type AgentCommand =
+  | {
+      createdAt: string;
+      id: string;
+      payload: {
+        passthroughArgs?: string[];
+        priority?: number;
+        prompt: string;
+        provider?: ProviderName;
+        sessionId?: string;
+      };
+      type: "submit";
+    }
+  | {
+      createdAt: string;
+      id: string;
+      payload: {
+        taskId: string;
+      };
+      type: "cancel";
+    }
+  | {
+      createdAt: string;
+      id: string;
+      payload: {
+        reason?: string;
+      };
+      type: "pause";
+    }
+  | {
+      createdAt: string;
+      id: string;
+      payload: Record<string, never>;
+      type: "resume";
+    }
+  | {
+      createdAt: string;
+      id: string;
+      payload: Record<string, never>;
+      type: "stop";
+    };
+
+export interface AgentRegistryEntry {
+  heartbeatAt: string;
+  pid: number;
+  projectKey: string;
+}
+
+export interface AgentDaemonState {
+  activeRun?: AgentActiveRun | undefined;
+  appliedCommandIds: string[];
+  createdAt: string;
+  events: SessionEvent[];
+  heartbeatAt: string;
+  lastError?: string | undefined;
+  lastResourceAssessment?: AgentResourceAssessment | undefined;
+  lastResourceSnapshot?: AgentResourceSnapshot | undefined;
+  pauseReason?: string | undefined;
+  pid?: number | undefined;
+  projectKey: string;
+  provider: ProviderName;
+  resourcePolicy: AgentResourcePolicy;
+  startedAt: string;
+  status: AgentDaemonStatus;
+  tasks: AgentTask[];
+  updatedAt: string;
+}
+
 export type StressStepKind =
   | "approval"
   | "chat"
