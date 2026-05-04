@@ -6,3 +6,4 @@ export * from "./memory.js";
 export * from "./session.js";
 export * from "./stress.js";
 export * from "./types.js";
+export * from "./workspace.js";

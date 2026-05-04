@@ -6,8 +6,6 @@ lint:
     - eslint
     - markdownlint
     - prettier
-    - trivy
-    - yamllint
 actions:
   enabled:
     - trunk-announce

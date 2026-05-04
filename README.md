@@ -17,6 +17,7 @@ session resume, and durable multi-day automation.
 - Temporal-shaped worker scaffolding for long-running stress and recovery suites
 - first-party stress scenarios for multi-endpoint, multi-day validation
 - thin consumer integration configs for `boba` and `tsqbev-poc`
+- GitKB-inspired multi-repo workspace alpha with guarded batch execution
 
 ## Install
 
@@ -46,6 +47,13 @@ pnpm --filter @achbogga/latte-cli exec latte agent start --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte agent console --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte agent submit --project /path/to/repo -- "continue the current task with this new constraint"
 pnpm --filter @achbogga/latte-cli exec latte stress plan
+pnpm --filter @achbogga/latte-cli exec latte workspace init --root /home/me/projects --discover --include boba,latte
+pnpm --filter @achbogga/latte-cli exec latte workspace status --root /home/me/projects
+pnpm --filter @achbogga/latte-cli exec latte workspace query --root /home/me/projects "tag:harness AND dirty:false"
+pnpm --filter @achbogga/latte-cli exec latte workspace exec --root /home/me/projects --include boba,latte -- git status --short
+pnpm --filter @achbogga/latte-cli exec latte workspace snapshot create --root /home/me/projects before-batch-write
+pnpm --filter @achbogga/latte-cli exec latte workspace skill install --root /home/me/projects
+pnpm --filter @achbogga/latte-cli exec latte workspace eval gitkb-alpha --root /home/me/projects
 ```
 
 ## Background Loop
@@ -65,6 +73,26 @@ The daemon is resource-aware on the local machine. It samples system load,
 memory headroom, and peer Latte daemons before starting new work, and it
 requeues failed tasks with backoff so sessions recover from transient failures
 instead of silently dying.
+
+## Workspace Alpha
+
+Latte can manage a lightweight `latte.workspace.yaml` at a parent directory so
+agents get a compact multi-repo brief before cross-repo work. This is inspired
+by GitKB Meta's manifest, query, snapshot, and AI-integration model, but it is
+implemented natively in Latte so product repos do not need GitKB binaries.
+
+- Workspace status and query commands expose repo health, tags, language, dirty
+  state, branch, and ahead/behind signals.
+- Workspace exec runs read-only commands across selected repos and forces
+  mutating commands into dry-run mode unless `--allow-write` and an explicit
+  snapshot are provided.
+- Workspace snapshots record Git heads and dirty flags before dangerous batch
+  operations.
+- Background agent prompts automatically include a workspace brief when the
+  project lives under a Latte workspace.
+
+See [docs/architecture/workspace-alpha.md](docs/architecture/workspace-alpha.md)
+for the safety model, manifest shape, and validation criteria.
 
 ## Repo Layout
 

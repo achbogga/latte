@@ -25,6 +25,7 @@ describe("api", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().summary).toContain("repo: boba");
+    const body = response.json<{ summary: string[] }>();
+    expect(body.summary).toContain("repo: boba");
   });
 });

@@ -15,27 +15,45 @@ import {
   assessAgentResources,
   buildDefaultConfig,
   buildResourceSnapshot,
+  buildWorkspaceEvalReport,
+  buildWorkspaceExecPlan,
+  buildWorkspaceRestorePlan,
   compileContextPack,
+  createWorkspaceSnapshot,
   createAgentCommand,
   createCacheKey,
   createStressRun,
+  discoverGitProjects,
+  discoverWorkspaceRoot,
   detectTransientFailureSignature,
   defaultStressScenarios,
   ensureDir,
   FileAgentStore,
   FileSessionStore,
+  installWorkspaceSkill,
+  inspectWorkspaceState,
+  listWorkspaceSnapshots,
   JsonMemoryStore,
   loadLatteConfig,
+  loadWorkspaceManifest,
   markTaskCompleted,
   markTaskRetry,
   markTaskRunning,
   noteResourceAssessment,
+  queryWorkspaceState,
+  readWorkspaceSnapshot,
   readJson,
   readManagedAuth,
+  renderWorkspaceBrief,
   renderPromptEnvelope,
   resolveProjectStateRoot,
+  runWorkspaceExecPlan,
   saveManagedAuth,
   selectRunnableTask,
+  workspaceCli,
+  workspaceManifestPath,
+  workspaceProjects,
+  writeWorkspaceManifest,
   writeJson,
   writeText,
   type AgentDaemonState,
@@ -43,6 +61,8 @@ import {
   type LatteConfig,
   type ProviderName,
   type SessionRecord,
+  type WorkspaceFilter,
+  type WorkspaceManifest,
 } from "@achbogga/latte-core";
 import { buildClaudeLaunchPlan } from "@achbogga/latte-provider-claude";
 import { buildCodexLaunchPlan } from "@achbogga/latte-provider-codex";
@@ -60,6 +80,14 @@ type AgentOptions = {
   foreground?: boolean;
   project: string;
   provider?: ProviderName;
+};
+
+type WorkspaceCommonOptions = {
+  exclude?: string;
+  include?: string;
+  json?: boolean;
+  root?: string;
+  tag?: string;
 };
 
 type TaskExitEnvelope = {
@@ -88,14 +116,18 @@ function isPidAlive(pid: number | undefined): boolean {
   }
 }
 
-function summarizeState(state: AgentDaemonState | null): Record<string, unknown> {
+function summarizeState(
+  state: AgentDaemonState | null,
+): Record<string, unknown> {
   if (!state) {
     return {
       status: "missing",
     };
   }
   const queued = state.tasks.filter((task) => task.status === "queued").length;
-  const running = state.tasks.filter((task) => task.status === "running").length;
+  const running = state.tasks.filter(
+    (task) => task.status === "running",
+  ).length;
   const completed = state.tasks.filter(
     (task) => task.status === "completed",
   ).length;
@@ -117,6 +149,56 @@ function summarizeState(state: AgentDaemonState | null): Record<string, unknown>
     running,
     status: state.status,
   };
+}
+
+function parseWorkspaceFilter(
+  options: WorkspaceCommonOptions,
+): WorkspaceFilter {
+  return {
+    exclude: workspaceCli.splitCsv(options.exclude),
+    include: workspaceCli.splitCsv(options.include),
+    tag: workspaceCli.splitCsv(options.tag),
+  };
+}
+
+async function resolveWorkspaceRoot(options: {
+  project?: string;
+  root?: string;
+}): Promise<string> {
+  const startPath = path.resolve(options.project ?? process.cwd());
+  const root = await discoverWorkspaceRoot(startPath, options.root);
+  if (!root) {
+    throw new Error(
+      "No latte.workspace.yaml found. Run `latte workspace init --root <path> --discover` first.",
+    );
+  }
+  return root;
+}
+
+function printWorkspaceState(
+  state: Awaited<ReturnType<typeof inspectWorkspaceState>>,
+  json?: boolean,
+): void {
+  if (json) {
+    console.log(JSON.stringify(state, null, 2));
+    return;
+  }
+  console.log(renderWorkspaceBrief(state));
+}
+
+function printWorkspaceProjects(
+  projects: ReturnType<typeof workspaceProjects>,
+  json?: boolean,
+): void {
+  if (json) {
+    console.log(JSON.stringify(projects, null, 2));
+    return;
+  }
+  for (const project of projects) {
+    const tags =
+      project.tags.length > 0 ? ` tags=${project.tags.join(",")}` : "";
+    console.log(`${project.name}\t${project.path}${tags}`);
+  }
 }
 
 async function buildForegroundLaunchPlan(prompt: string, options: RunOptions) {
@@ -202,7 +284,8 @@ async function resolveSessionForTask(
   const latest = all
     .filter(
       (session) =>
-        session.projectKey === config.namespace && session.provider === task.provider,
+        session.projectKey === config.namespace &&
+        session.provider === task.provider,
     )
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   if (latest) {
@@ -238,6 +321,33 @@ async function buildTaskPrompt(
       ...hits.map((hit, index) => `${index + 1}. ${hit.content}`),
     );
   }
+
+  const workspaceRoot = await discoverWorkspaceRoot(projectRoot).catch(
+    () => null,
+  );
+  if (workspaceRoot) {
+    const workspaceState = await inspectWorkspaceState(workspaceRoot).catch(
+      () => null,
+    );
+    if (workspaceState) {
+      sections.push(
+        "",
+        "## Workspace context",
+        renderWorkspaceBrief(workspaceState, projectRoot),
+      );
+    }
+    const workspaceSkill = await readFile(
+      path.join(workspaceRoot, ".latte", "skills", "gitkb-workspace-alpha.md"),
+      "utf8",
+    ).catch(() => null);
+    if (workspaceSkill) {
+      sections.push(
+        "",
+        "## Workspace skill",
+        workspaceSkill.trim().slice(0, 2_000),
+      );
+    }
+  }
   return `${sections.join("\n")}\n`;
 }
 
@@ -259,7 +369,12 @@ async function launchBackgroundTask(
     repoSha: contextPack.repo.sha ?? "unknown",
     rules: contextPack.rules.join(","),
   });
-  const session = await resolveSessionForTask(projectRoot, config, task, cacheKey);
+  const session = await resolveSessionForTask(
+    projectRoot,
+    config,
+    task,
+    cacheKey,
+  );
   const promptText = await buildTaskPrompt(projectRoot, config, session, task);
   const runPath = path.join(
     resolveProjectStateRoot(projectRoot),
@@ -302,14 +417,17 @@ async function launchBackgroundTask(
   child.stderr.on("data", (chunk: Buffer) => {
     logStream.write(chunk);
   });
-  child.on("close", async (code: number | null, signal: NodeJS.Signals | null) => {
-    await writeJson(exitPath, {
-      code,
-      finishedAt: new Date().toISOString(),
-      signal,
-    } satisfies TaskExitEnvelope);
-    logStream.end();
-  });
+  child.on(
+    "close",
+    async (code: number | null, signal: NodeJS.Signals | null) => {
+      await writeJson(exitPath, {
+        code,
+        finishedAt: new Date().toISOString(),
+        signal,
+      } satisfies TaskExitEnvelope);
+      logStream.end();
+    },
+  );
   child.stdin.end(envelope);
 
   session.lastPrompt = task.prompt;
@@ -365,7 +483,10 @@ async function finalizeBackgroundTask(
     return state;
   }
 
-  const exit = await readJson<TaskExitEnvelope | null>(state.activeRun.exitPath, null);
+  const exit = await readJson<TaskExitEnvelope | null>(
+    state.activeRun.exitPath,
+    null,
+  );
   if (!exit) {
     if (isPidAlive(state.activeRun.pid)) {
       return state;
@@ -385,15 +506,18 @@ async function finalizeBackgroundTask(
   const outputBody = await readFile(state.activeRun.outputPath, "utf8").catch(
     () => "",
   );
-  await new FileSessionStore(projectRoot).appendEvent(state.activeRun.sessionId, {
-    payload: {
-      exitCode: exit.code,
-      outputPath: state.activeRun.outputPath,
-      taskId: state.activeRun.taskId,
+  await new FileSessionStore(projectRoot).appendEvent(
+    state.activeRun.sessionId,
+    {
+      payload: {
+        exitCode: exit.code,
+        outputPath: state.activeRun.outputPath,
+        taskId: state.activeRun.taskId,
+      },
+      timestamp: exit.finishedAt,
+      type: exit.code === 0 ? "agent_task_completed" : "agent_task_failed",
     },
-    timestamp: exit.finishedAt,
-    type: exit.code === 0 ? "agent_task_completed" : "agent_task_failed",
-  });
+  );
 
   if (outputBody.trim()) {
     await new JsonMemoryStore(resolveProjectStateRoot(projectRoot)).add({
@@ -437,7 +561,9 @@ async function finalizeBackgroundTask(
       );
 }
 
-async function waitForDaemonReady(projectRoot: string): Promise<AgentDaemonState | null> {
+async function waitForDaemonReady(
+  projectRoot: string,
+): Promise<AgentDaemonState | null> {
   const store = new FileAgentStore(projectRoot);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const state = await store.readState();
@@ -508,8 +634,7 @@ async function runAgentDaemon(projectRoot: string, provider?: ProviderName) {
       pid: process.pid,
       provider: provider ?? state.provider,
       startedAt: state.startedAt ?? timestamp,
-      status:
-        state.status === "stopped" ? "starting" : state.status,
+      status: state.status === "stopped" ? "starting" : state.status,
       updatedAt: timestamp,
     };
 
@@ -643,7 +768,9 @@ async function runAgentConsole(projectRoot: string, provider?: ProviderName) {
         continue;
       }
       if (line === "status") {
-        console.log(JSON.stringify(summarizeState(await store.readState()), null, 2));
+        console.log(
+          JSON.stringify(summarizeState(await store.readState()), null, 2),
+        );
         continue;
       }
       if (line === "queue") {
@@ -670,12 +797,16 @@ async function runAgentConsole(projectRoot: string, provider?: ProviderName) {
         continue;
       }
       if (line === "resume") {
-        await store.enqueueCommand(createAgentCommand({ payload: {}, type: "resume" }));
+        await store.enqueueCommand(
+          createAgentCommand({ payload: {}, type: "resume" }),
+        );
         console.log("Queued resume request.");
         continue;
       }
       if (line === "stop") {
-        await store.enqueueCommand(createAgentCommand({ payload: {}, type: "stop" }));
+        await store.enqueueCommand(
+          createAgentCommand({ payload: {}, type: "stop" }),
+        );
         console.log("Queued stop request.");
         continue;
       }
@@ -958,6 +1089,289 @@ stress
       console.log(JSON.stringify(run, null, 2));
     },
   );
+
+const workspace = program
+  .command("workspace")
+  .description("GitKB-inspired multi-repo workspace alpha");
+
+workspace
+  .command("init")
+  .option("--root <path>", "Workspace root", process.cwd())
+  .option("--discover", "Discover git repos under the root")
+  .option("--include <repos>", "Comma-separated repo names to include")
+  .action(
+    async ({
+      discover,
+      include,
+      root,
+    }: {
+      discover?: boolean;
+      include?: string;
+      root: string;
+    }) => {
+      const workspaceRoot = path.resolve(root);
+      const projects = discover
+        ? await discoverGitProjects(
+            workspaceRoot,
+            workspaceCli.splitCsv(include),
+          )
+        : {};
+      const manifest: WorkspaceManifest = {
+        generatedAt: new Date().toISOString(),
+        projects,
+        schemaVersion: "0.1-alpha",
+      };
+      await writeWorkspaceManifest(workspaceRoot, manifest);
+      console.log(
+        JSON.stringify(
+          {
+            manifestPath: workspaceManifestPath(workspaceRoot),
+            projectCount: Object.keys(projects).length,
+            projects: Object.keys(projects).sort(),
+          },
+          null,
+          2,
+        ),
+      );
+    },
+  );
+
+workspace
+  .command("list")
+  .option("--root <path>", "Workspace root")
+  .option("--json", "Print JSON")
+  .action(async (options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    const manifest = await loadWorkspaceManifest(workspaceRoot);
+    printWorkspaceProjects(workspaceProjects(manifest), options.json);
+  });
+
+workspace
+  .command("status")
+  .option("--root <path>", "Workspace root")
+  .option("--include <repos>", "Comma-separated repo names to include")
+  .option("--exclude <repos>", "Comma-separated repo names to exclude")
+  .option("--tag <tags>", "Comma-separated tags to include")
+  .option("--json", "Print JSON")
+  .action(async (options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    const state = await inspectWorkspaceState(
+      workspaceRoot,
+      parseWorkspaceFilter(options),
+    );
+    printWorkspaceState(state, options.json);
+  });
+
+workspace
+  .command("query")
+  .option("--root <path>", "Workspace root")
+  .option("--include <repos>", "Comma-separated repo names to include")
+  .option("--exclude <repos>", "Comma-separated repo names to exclude")
+  .option("--tag <tags>", "Comma-separated tags to include")
+  .option("--json", "Print JSON")
+  .argument("<expression...>")
+  .action(
+    async (expressionParts: string[], options: WorkspaceCommonOptions) => {
+      const workspaceRoot = await resolveWorkspaceRoot(options);
+      const state = await inspectWorkspaceState(
+        workspaceRoot,
+        parseWorkspaceFilter(options),
+      );
+      const results = queryWorkspaceState(state, expressionParts.join(" "));
+      if (options.json) {
+        console.log(JSON.stringify(results, null, 2));
+        return;
+      }
+      for (const project of results) {
+        console.log(`${project.name}\t${project.path}`);
+      }
+    },
+  );
+
+workspace
+  .command("exec")
+  .option("--root <path>", "Workspace root")
+  .option("--include <repos>", "Comma-separated repo names to include")
+  .option("--exclude <repos>", "Comma-separated repo names to exclude")
+  .option("--tag <tags>", "Comma-separated tags to include")
+  .option("--dry-run", "Print the execution plan without running commands")
+  .option(
+    "--allow-write",
+    "Allow mutating commands when paired with a snapshot",
+  )
+  .option("--snapshot <name>", "Required snapshot name for mutating commands")
+  .allowUnknownOption(true)
+  .argument("<command...>")
+  .action(
+    async (
+      commandParts: string[],
+      options: WorkspaceCommonOptions & {
+        allowWrite?: boolean;
+        dryRun?: boolean;
+        snapshot?: string;
+      },
+    ) => {
+      const command = commandParts.filter((part) => part !== "--");
+      if (command.length === 0) {
+        throw new Error(
+          "Missing command. Use `latte workspace exec -- <cmd>`.",
+        );
+      }
+      const workspaceRoot = await resolveWorkspaceRoot(options);
+      const execOptions: {
+        allowWrite?: boolean;
+        dryRun?: boolean;
+        snapshot?: string;
+      } = {};
+      if (options.allowWrite !== undefined) {
+        execOptions.allowWrite = options.allowWrite;
+      }
+      if (options.dryRun !== undefined) {
+        execOptions.dryRun = options.dryRun;
+      }
+      if (options.snapshot !== undefined) {
+        execOptions.snapshot = options.snapshot;
+      }
+      const plan = await buildWorkspaceExecPlan(
+        workspaceRoot,
+        command,
+        parseWorkspaceFilter(options),
+        execOptions,
+      );
+      if (plan.mutating && options.allowWrite && options.snapshot) {
+        const snapshot = await readWorkspaceSnapshot(
+          workspaceRoot,
+          options.snapshot,
+        );
+        if (!snapshot) {
+          throw new Error(
+            `Snapshot ${options.snapshot} not found. Run \`latte workspace snapshot create ${options.snapshot}\` first.`,
+          );
+        }
+      }
+      if (plan.dryRun) {
+        console.log(JSON.stringify({ plan, results: [] }, null, 2));
+        return;
+      }
+      const results = runWorkspaceExecPlan(plan);
+      console.log(JSON.stringify({ plan, results }, null, 2));
+      if (results.some((result) => result.exitCode !== 0)) {
+        process.exitCode = 1;
+      }
+    },
+  );
+
+const workspaceSnapshot = workspace
+  .command("snapshot")
+  .description("Capture and inspect workspace git heads");
+
+workspaceSnapshot
+  .command("create")
+  .option("--root <path>", "Workspace root")
+  .option("--include <repos>", "Comma-separated repo names to include")
+  .option("--exclude <repos>", "Comma-separated repo names to exclude")
+  .option("--tag <tags>", "Comma-separated tags to include")
+  .argument("<name>")
+  .action(async (name: string, options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    const snapshot = await createWorkspaceSnapshot(
+      workspaceRoot,
+      name,
+      parseWorkspaceFilter(options),
+    );
+    console.log(JSON.stringify(snapshot, null, 2));
+  });
+
+workspaceSnapshot
+  .command("list")
+  .option("--root <path>", "Workspace root")
+  .action(async (options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    console.log(
+      JSON.stringify(await listWorkspaceSnapshots(workspaceRoot), null, 2),
+    );
+  });
+
+workspaceSnapshot
+  .command("show")
+  .option("--root <path>", "Workspace root")
+  .argument("<name>")
+  .action(async (name: string, options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    const snapshot = await readWorkspaceSnapshot(workspaceRoot, name);
+    if (!snapshot) {
+      throw new Error(`Snapshot ${name} not found.`);
+    }
+    console.log(JSON.stringify(snapshot, null, 2));
+  });
+
+workspaceSnapshot
+  .command("restore")
+  .option("--root <path>", "Workspace root")
+  .option("--allow-restore", "Execute git checkout commands")
+  .argument("<name>")
+  .action(
+    async (
+      name: string,
+      options: WorkspaceCommonOptions & { allowRestore?: boolean },
+    ) => {
+      const workspaceRoot = await resolveWorkspaceRoot(options);
+      const snapshot = await readWorkspaceSnapshot(workspaceRoot, name);
+      if (!snapshot) {
+        throw new Error(`Snapshot ${name} not found.`);
+      }
+      const plan = buildWorkspaceRestorePlan(snapshot);
+      if (!options.allowRestore) {
+        console.log(JSON.stringify({ plan, results: [] }, null, 2));
+        return;
+      }
+      const executablePlan = { ...plan, dryRun: false };
+      const results = runWorkspaceExecPlan(executablePlan);
+      console.log(JSON.stringify({ plan: executablePlan, results }, null, 2));
+      if (results.some((result) => result.exitCode !== 0)) {
+        process.exitCode = 1;
+      }
+    },
+  );
+
+workspace
+  .command("brief")
+  .option("--root <path>", "Workspace root")
+  .option("--for-repo <name>", "Mark a workspace repo as current")
+  .action(async ({ forRepo, root }: { forRepo?: string; root?: string }) => {
+    const workspaceRoot = await resolveWorkspaceRoot(root ? { root } : {});
+    const state = await inspectWorkspaceState(workspaceRoot);
+    const current = forRepo
+      ? state.projects.find((project) => project.name === forRepo)?.path
+      : process.cwd();
+    console.log(renderWorkspaceBrief(state, current));
+  });
+
+const workspaceSkill = workspace
+  .command("skill")
+  .description("Install alpha workspace skills");
+
+workspaceSkill
+  .command("install")
+  .option("--root <path>", "Workspace root")
+  .action(async (options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    console.log(await installWorkspaceSkill(workspaceRoot));
+  });
+
+const workspaceEval = workspace
+  .command("eval")
+  .description("Run workspace usefulness evaluations");
+
+workspaceEval
+  .command("gitkb-alpha")
+  .option("--root <path>", "Workspace root")
+  .action(async (options: WorkspaceCommonOptions) => {
+    const workspaceRoot = await resolveWorkspaceRoot(options);
+    console.log(
+      JSON.stringify(await buildWorkspaceEvalReport(workspaceRoot), null, 2),
+    );
+  });
 
 const agent = program
   .command("agent")

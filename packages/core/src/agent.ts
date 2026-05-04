@@ -118,9 +118,7 @@ function backoffMs(policy: AgentResourcePolicy, attempts: number): number {
   return Math.min(raw, policy.maxRetryBackoffMs);
 }
 
-export function createAgentCommand(
-  command: AgentCommandInput,
-): AgentCommand {
+export function createAgentCommand(command: AgentCommandInput): AgentCommand {
   return {
     ...command,
     createdAt: nowIso(),
@@ -219,10 +217,7 @@ export function detectTransientFailureSignature(
   return null;
 }
 
-export function isHeartbeatFresh(
-  state: AgentDaemonState,
-  now: Date,
-): boolean {
+export function isHeartbeatFresh(state: AgentDaemonState, now: Date): boolean {
   return (
     now.getTime() - new Date(state.heartbeatAt).getTime() <=
     state.resourcePolicy.heartbeatTtlMs
@@ -484,7 +479,9 @@ export function markTaskRetry(
               completedAt: shouldFail ? failedAt : undefined,
               lastError: error,
               lastExitCode: exitCode,
-              nextAttemptAt: shouldFail ? candidate.nextAttemptAt : nextAttemptAt,
+              nextAttemptAt: shouldFail
+                ? candidate.nextAttemptAt
+                : nextAttemptAt,
               status: shouldFail ? "failed" : "queued",
               updatedAt: failedAt,
             }
@@ -524,7 +521,9 @@ export function noteResourceAssessment(
               reasons: assessment.reasons,
             },
             timestamp,
-            type: assessment.allowed ? "resources_available" : "resource_backoff",
+            type: assessment.allowed
+              ? "resources_available"
+              : "resource_backoff",
           },
           state.resourcePolicy.maxTrackedEvents,
         )
@@ -586,7 +585,9 @@ export class FileAgentStore {
     return filePath;
   }
 
-  async listPendingCommands(): Promise<Array<{ command: AgentCommand; path: string }>> {
+  async listPendingCommands(): Promise<
+    Array<{ command: AgentCommand; path: string }>
+  > {
     await ensureDir(this.inboxRoot);
     const entries = (await readdir(this.inboxRoot))
       .filter((entry) => entry.endsWith(".json"))
@@ -606,7 +607,9 @@ export class FileAgentStore {
     await rm(commandPath, { force: true });
   }
 
-  async updateRegistry(entry: AgentRegistryEntry): Promise<AgentRegistryEntry[]> {
+  async updateRegistry(
+    entry: AgentRegistryEntry,
+  ): Promise<AgentRegistryEntry[]> {
     const current = await readJson<AgentRegistryEntry[]>(this.registryPath, []);
     const next = current
       .filter((candidate) => candidate.projectKey !== entry.projectKey)

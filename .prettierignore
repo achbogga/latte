@@ -1,0 +1,10 @@
+.latte/
+.pnpm-store/
+.turbo/
+.trunk/
+coverage/
+dist/
+node_modules/
+pnpm-lock.yaml
+services/api/.data/
+services/worker/.runtime/

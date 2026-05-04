@@ -18,7 +18,7 @@ import {
 } from "../packages/core/src/agent.js";
 
 describe("agent daemon state", () => {
-  test("queues submitted prompts and selects the next runnable task", async () => {
+  test("queues submitted prompts and selects the next runnable task", () => {
     let state = buildDefaultDaemonState("demo", "codex");
     state = applyAgentCommand(
       state,
@@ -91,9 +91,9 @@ describe("agent daemon state", () => {
       1,
       "2026-04-16T00:00:01.000Z",
     );
-    expect(state.tasks.find((candidate) => candidate.id === task!.id)?.status).toBe(
-      "queued",
-    );
+    expect(
+      state.tasks.find((candidate) => candidate.id === task!.id)?.status,
+    ).toBe("queued");
 
     state = markTaskRunning(state, task!.id, "2026-04-16T00:01:00.000Z");
     state = markTaskRetry(
@@ -120,9 +120,9 @@ describe("agent daemon state", () => {
       "2026-04-16T00:03:01.000Z",
     );
 
-    expect(state.tasks.find((candidate) => candidate.id === task!.id)?.status).toBe(
-      "failed",
-    );
+    expect(
+      state.tasks.find((candidate) => candidate.id === task!.id)?.status,
+    ).toBe("failed");
   });
 });
 

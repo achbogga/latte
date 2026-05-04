@@ -6,12 +6,14 @@ Latte keeps project repos thin and moves the harness into a managed control plan
 
 - CLI: project-aware wrapper around Codex CLI and Claude Code
 - Core: config, context compilation, session cache, memory abstractions, and stress definitions
+- Workspace alpha: parent-level multi-repo manifest, status/query, snapshots, and guarded exec
 - API: managed service for indexing, briefs, sessions, and stress runs
 - Worker: durable workflow execution and failure-injection test loops
 
 ## Persistence
 
 - `.latte/`: local cache, run bundles, and resumable session metadata
+- `latte.workspace.yaml`: optional parent manifest for related local repos
 - Postgres: remote session and run metadata
 - Redis: hot cache and queue/lease support
 - Qdrant: indexed retrieval corpus

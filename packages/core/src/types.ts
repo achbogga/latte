@@ -242,6 +242,100 @@ export interface AgentDaemonState {
   updatedAt: string;
 }
 
+export interface WorkspaceProject {
+  dependsOn: string[];
+  meta: boolean;
+  name: string;
+  path: string;
+  provides: string[];
+  repo?: string | undefined;
+  tags: string[];
+}
+
+export interface WorkspaceManifest {
+  generatedAt?: string | undefined;
+  projects: Record<string, string | WorkspaceProject>;
+  schemaVersion?: string | undefined;
+}
+
+export interface WorkspaceProjectState {
+  ahead: boolean;
+  behind: boolean;
+  branch: string | null;
+  dirty: boolean;
+  exists: boolean;
+  head: string | null;
+  language: string | null;
+  lastModifiedAt: string | null;
+  name: string;
+  path: string;
+  repo?: string | undefined;
+  tags: string[];
+}
+
+export interface WorkspaceState {
+  generatedAt: string;
+  projects: WorkspaceProjectState[];
+  root: string;
+}
+
+export interface WorkspaceFilter {
+  exclude?: string[] | undefined;
+  include?: string[] | undefined;
+  tag?: string[] | undefined;
+}
+
+export interface WorkspaceExecPlan {
+  command: string[];
+  dryRun: boolean;
+  mutating: boolean;
+  projects: Array<{
+    command: string[];
+    cwd: string;
+    name: string;
+  }>;
+  requiresSnapshot: boolean;
+  snapshot?: string | undefined;
+}
+
+export interface WorkspaceExecResult {
+  command: string[];
+  cwd: string;
+  exitCode: number | null;
+  name: string;
+  stderr: string;
+  stdout: string;
+}
+
+export interface WorkspaceSnapshotProject {
+  branch: string | null;
+  dirty: boolean;
+  head: string | null;
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceSnapshot {
+  createdAt: string;
+  name: string;
+  projects: WorkspaceSnapshotProject[];
+  root: string;
+}
+
+export interface WorkspaceEvalReport {
+  generatedAt: string;
+  metrics: {
+    contextOverheadRatio: number;
+    dirtyRepoCount: number;
+    discoveredRepoCount: number;
+    workspaceProjectCount: number;
+  };
+  recommendations: string[];
+  root: string;
+  scenario: "gitkb-alpha";
+  useful: boolean;
+}
+
 export type StressStepKind =
   | "approval"
   | "chat"
