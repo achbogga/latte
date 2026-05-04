@@ -18,6 +18,7 @@ session resume, and durable multi-day automation.
 - first-party stress scenarios for multi-endpoint, multi-day validation
 - thin consumer integration configs for `boba` and `tsqbev-poc`
 - GitKB-inspired multi-repo workspace alpha with guarded batch execution
+- OpenClaw-inspired cron, session, memory-sweep, and extreme stress primitives
 
 ## Install
 
@@ -47,6 +48,11 @@ pnpm --filter @achbogga/latte-cli exec latte agent start --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte agent console --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte agent submit --project /path/to/repo -- "continue the current task with this new constraint"
 pnpm --filter @achbogga/latte-cli exec latte stress plan
+pnpm --filter @achbogga/latte-cli exec latte stress extreme --project /path/to/repo
+pnpm --filter @achbogga/latte-cli exec latte cron add --project /path/to/repo --every 30m --session isolated --name "Memory sweep" -- "Run memory sweep and summarize drift."
+pnpm --filter @achbogga/latte-cli exec latte cron list --project /path/to/repo
+pnpm --filter @achbogga/latte-cli exec latte sessions list --project /path/to/repo
+pnpm --filter @achbogga/latte-cli exec latte memory sweep --project /path/to/repo
 pnpm --filter @achbogga/latte-cli exec latte workspace init --root /home/me/projects --discover --include boba,latte
 pnpm --filter @achbogga/latte-cli exec latte workspace status --root /home/me/projects
 pnpm --filter @achbogga/latte-cli exec latte workspace query --root /home/me/projects "tag:harness AND dirty:false"
@@ -93,6 +99,21 @@ implemented natively in Latte so product repos do not need GitKB binaries.
 
 See [docs/architecture/workspace-alpha.md](docs/architecture/workspace-alpha.md)
 for the safety model, manifest shape, and validation criteria.
+
+## Cron, Sessions, And Memory
+
+Latte now includes an OpenClaw-inspired local control plane:
+
+- `latte cron` persists scheduled jobs and run ledgers under `.latte/cron/`.
+- Cron jobs can target `main`, `isolated`, or `session:<key>` session contexts.
+- `latte sessions` inspects durable sessions and compacts recent events into memory.
+- `latte memory sweep` deduplicates, TTL-prunes, and promotes memory into
+  `.latte/memory/MEMORY.md`.
+- `latte stress extreme` runs the deterministic gauntlet for cron pressure,
+  session continuity, run reconciliation, and memory sweeps.
+
+See
+[docs/architecture/openclaw-inspired-harness.md](docs/architecture/openclaw-inspired-harness.md).
 
 ## Repo Layout
 

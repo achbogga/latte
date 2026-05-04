@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { JsonMemoryStore, rerankHits } from "../packages/core/src/memory.js";
+import {
+  JsonMemoryStore,
+  rerankHits,
+  sweepMemory,
+} from "../packages/core/src/memory.js";
 
 describe("memory and reranking", () => {
   test("stores and retrieves lexical memories", async () => {
@@ -47,5 +51,45 @@ describe("memory and reranking", () => {
       },
     ]);
     expect(reranked[0]?.id).toBe("b");
+  });
+
+  test("sweeps memory into a compact vault", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "latte-memory-"));
+    const store = new JsonMemoryStore(root);
+    await store.add({
+      confidence: 0.9,
+      content: "Cron runs need isolated sessions for background work.",
+      kind: "policy",
+      metadata: {},
+      namespace: "latte",
+      provenance: ["test"],
+    });
+    await store.add({
+      confidence: 0.9,
+      content: "Cron runs need isolated sessions for background work.",
+      kind: "policy",
+      metadata: { duplicate: true },
+      namespace: "latte",
+      provenance: ["test"],
+    });
+    await store.add({
+      confidence: 0.2,
+      content: "Short lived token should expire.",
+      freshnessTtlSeconds: 1,
+      kind: "episodic",
+      metadata: {},
+      namespace: "latte",
+      provenance: ["test"],
+    });
+
+    const report = await sweepMemory(root, "latte", {
+      now: new Date(Date.now() + 5_000),
+    });
+
+    expect(report.inputItems).toBe(3);
+    expect(report.retained).toBe(1);
+    expect(report.expired).toBe(1);
+    expect(report.promoted).toBe(1);
+    expect(report.vaultPath).toContain("MEMORY.md");
   });
 });

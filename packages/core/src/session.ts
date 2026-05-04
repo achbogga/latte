@@ -43,6 +43,7 @@ export class FileSessionStore {
     projectKey: string,
     provider: ProviderName,
     cacheKey: string,
+    options: { metadata?: Record<string, unknown>; sessionKey?: string } = {},
   ): Promise<SessionRecord> {
     await ensureDir(this.sessionsRoot);
     const session: SessionRecord = {
@@ -50,13 +51,38 @@ export class FileSessionStore {
       createdAt: new Date().toISOString(),
       events: [],
       id: randomUUID(),
-      metadata: {},
+      metadata: options.metadata ?? {},
       projectKey,
       provider,
+      ...(options.sessionKey ? { sessionKey: options.sessionKey } : {}),
       updatedAt: new Date().toISOString(),
     };
     await this.save(session);
     return session;
+  }
+
+  async getByKey(sessionKey: string): Promise<SessionRecord | null> {
+    const sessions = await this.list();
+    return (
+      sessions.find((session) => session.sessionKey === sessionKey) ?? null
+    );
+  }
+
+  async getOrCreateByKey(
+    projectKey: string,
+    provider: ProviderName,
+    cacheKey: string,
+    sessionKey: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<SessionRecord> {
+    const existing = await this.getByKey(sessionKey);
+    if (existing) {
+      return existing;
+    }
+    return this.create(projectKey, provider, cacheKey, {
+      metadata,
+      sessionKey,
+    });
   }
 
   async get(id: string): Promise<SessionRecord | null> {

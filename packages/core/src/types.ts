@@ -60,6 +60,7 @@ export interface SessionRecord {
   projectKey: string;
   provider: ProviderName;
   providerSessionId?: string;
+  sessionKey?: string | undefined;
   updatedAt: string;
   events: SessionEvent[];
 }
@@ -107,8 +108,16 @@ export type AgentTaskStatus =
   | "cancelled"
   | "completed"
   | "failed"
+  | "lost"
   | "queued"
   | "running";
+
+export interface AgentTaskOrigin {
+  id?: string | undefined;
+  kind: "cron" | "heartbeat" | "hook" | "manual";
+  runId?: string | undefined;
+  sessionTarget?: CronSessionTarget | undefined;
+}
 
 export interface AgentResourcePolicy {
   heartbeatTtlMs: number;
@@ -149,12 +158,14 @@ export interface AgentTask {
   lastExitCode?: number | null | undefined;
   logPath?: string | undefined;
   nextAttemptAt: string;
+  origin?: AgentTaskOrigin | undefined;
   outputPath?: string | undefined;
   passthroughArgs: string[];
   priority: number;
   prompt: string;
   provider: ProviderName;
   runPath?: string | undefined;
+  sessionKey?: string | undefined;
   sessionId?: string | undefined;
   startedAt?: string | undefined;
   status: AgentTaskStatus;
@@ -183,6 +194,8 @@ export type AgentCommand =
         priority?: number;
         prompt: string;
         provider?: ProviderName;
+        origin?: AgentTaskOrigin;
+        sessionKey?: string;
         sessionId?: string;
       };
       type: "submit";
@@ -240,6 +253,95 @@ export interface AgentDaemonState {
   status: AgentDaemonStatus;
   tasks: AgentTask[];
   updatedAt: string;
+}
+
+export type CronSchedule =
+  | {
+      at: string;
+      kind: "at";
+    }
+  | {
+      everyMs: number;
+      kind: "interval";
+    };
+
+export type CronSessionTarget =
+  | {
+      kind: "isolated";
+    }
+  | {
+      kind: "main";
+    }
+  | {
+      key: string;
+      kind: "named";
+    };
+
+export type CronDeliveryMode = "announce" | "none" | "webhook";
+
+export interface CronJob {
+  createdAt: string;
+  deleteAfterRun: boolean;
+  deliveryMode: CronDeliveryMode;
+  enabled: boolean;
+  id: string;
+  lastRunAt?: string | undefined;
+  maxAttempts: number;
+  name: string;
+  nextRunAt: string;
+  prompt: string;
+  provider?: ProviderName | undefined;
+  schedule: CronSchedule;
+  sessionTarget: CronSessionTarget;
+  tags: string[];
+  updatedAt: string;
+}
+
+export type CronRunStatus =
+  | "failed"
+  | "lost"
+  | "queued"
+  | "running"
+  | "skipped"
+  | "succeeded";
+
+export interface CronRunRecord {
+  attempt: number;
+  createdAt: string;
+  error?: string | undefined;
+  finishedAt?: string | undefined;
+  id: string;
+  jobId: string;
+  projectKey: string;
+  provider: ProviderName;
+  sessionKey: string;
+  startedAt?: string | undefined;
+  status: CronRunStatus;
+  taskId?: string | undefined;
+  updatedAt: string;
+}
+
+export interface CronState {
+  jobs: CronJob[];
+  runs: CronRunRecord[];
+  updatedAt: string;
+}
+
+export interface CronTickResult {
+  enqueued: CronRunRecord[];
+  jobsDue: number;
+  skipped: CronRunRecord[];
+  state: AgentDaemonState;
+}
+
+export interface MemorySweepReport {
+  expired: number;
+  generatedAt: string;
+  inputItems: number;
+  namespace: string;
+  promoted: number;
+  retained: number;
+  vaultPath: string;
 }
 
 export interface WorkspaceProject {
@@ -393,4 +495,23 @@ export interface StressRun {
   id: string;
   scenario: StressScenario;
   status: StressRunStatus;
+}
+
+export interface HarnessStressCheck {
+  detail: string;
+  name: string;
+  passed: boolean;
+}
+
+export interface HarnessStressReport {
+  checks: HarnessStressCheck[];
+  generatedAt: string;
+  projectKey: string;
+  reportPath?: string | undefined;
+  scenario: "extreme-harness-gauntlet";
+  summary: {
+    failed: number;
+    passed: number;
+    total: number;
+  };
 }

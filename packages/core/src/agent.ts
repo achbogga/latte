@@ -13,6 +13,7 @@ import type {
   AgentResourcePolicy,
   AgentResourceSnapshot,
   AgentTask,
+  AgentTaskOrigin,
   ProviderName,
   SessionEvent,
 } from "./types.js";
@@ -24,6 +25,8 @@ type AgentCommandInput =
         priority?: number;
         prompt: string;
         provider?: ProviderName;
+        origin?: AgentTaskOrigin;
+        sessionKey?: string;
         sessionId?: string;
       };
       type: "submit";
@@ -106,7 +109,8 @@ function pruneTasks(
       (task) =>
         task.status === "cancelled" ||
         task.status === "completed" ||
-        task.status === "failed",
+        task.status === "failed" ||
+        task.status === "lost",
     )
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, maxTrackedFinishedTasks);
@@ -251,41 +255,7 @@ export function applyAgentCommand(
   };
 
   if (command.type === "submit") {
-    const task: AgentTask = {
-      attempts: 0,
-      createdAt: timestamp,
-      id: randomUUID(),
-      nextAttemptAt: timestamp,
-      passthroughArgs: command.payload.passthroughArgs ?? [],
-      priority: command.payload.priority ?? 0,
-      prompt: command.payload.prompt.trim(),
-      provider: command.payload.provider ?? state.provider,
-      sessionId: command.payload.sessionId,
-      status: "queued",
-      updatedAt: timestamp,
-    };
-    next = {
-      ...next,
-      events: appendEvent(
-        next.events,
-        {
-          payload: {
-            priority: task.priority,
-            provider: task.provider,
-            taskId: task.id,
-          },
-          timestamp,
-          type: "task_enqueued",
-        },
-        next.resourcePolicy.maxTrackedEvents,
-      ),
-      status: next.status === "paused" ? next.status : "idle",
-      tasks: pruneTasks(
-        [...next.tasks, task],
-        next.resourcePolicy.maxTrackedFinishedTasks,
-      ),
-    };
-    return next;
+    return enqueueAgentTask(next, command.payload, timestamp);
   }
 
   if (command.type === "cancel") {
@@ -366,6 +336,76 @@ export function applyAgentCommand(
   };
 }
 
+export function enqueueAgentTask(
+  state: AgentDaemonState,
+  payload: {
+    origin?: AgentTaskOrigin;
+    passthroughArgs?: string[];
+    priority?: number;
+    prompt: string;
+    provider?: ProviderName;
+    sessionKey?: string;
+    sessionId?: string;
+  },
+  timestamp = nowIso(),
+): AgentDaemonState {
+  return enqueueAgentTaskWithResult(state, payload, timestamp).state;
+}
+
+export function enqueueAgentTaskWithResult(
+  state: AgentDaemonState,
+  payload: {
+    origin?: AgentTaskOrigin;
+    passthroughArgs?: string[];
+    priority?: number;
+    prompt: string;
+    provider?: ProviderName;
+    sessionKey?: string;
+    sessionId?: string;
+  },
+  timestamp = nowIso(),
+): { state: AgentDaemonState; task: AgentTask } {
+  const task: AgentTask = {
+    attempts: 0,
+    createdAt: timestamp,
+    id: randomUUID(),
+    nextAttemptAt: timestamp,
+    ...(payload.origin ? { origin: payload.origin } : {}),
+    passthroughArgs: payload.passthroughArgs ?? [],
+    priority: payload.priority ?? 0,
+    prompt: payload.prompt.trim(),
+    provider: payload.provider ?? state.provider,
+    ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
+    ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
+    status: "queued",
+    updatedAt: timestamp,
+  };
+  const nextState: AgentDaemonState = {
+    ...state,
+    events: appendEvent(
+      state.events,
+      {
+        payload: {
+          origin: task.origin ?? { kind: "manual" },
+          priority: task.priority,
+          provider: task.provider,
+          taskId: task.id,
+        },
+        timestamp,
+        type: "task_enqueued",
+      },
+      state.resourcePolicy.maxTrackedEvents,
+    ),
+    status: state.status === "paused" ? state.status : "idle",
+    tasks: pruneTasks(
+      [...state.tasks, task],
+      state.resourcePolicy.maxTrackedFinishedTasks,
+    ),
+    updatedAt: timestamp,
+  };
+  return { state: nextState, task };
+}
+
 export function markTaskRunning(
   state: AgentDaemonState,
   taskId: string,
@@ -434,6 +474,70 @@ export function markTaskCompleted(
     ),
     updatedAt: completedAt,
   };
+}
+
+export function markTaskLost(
+  state: AgentDaemonState,
+  taskId: string,
+  reason: string,
+  lostAt = nowIso(),
+): AgentDaemonState {
+  return {
+    ...state,
+    activeRun: state.activeRun?.taskId === taskId ? undefined : state.activeRun,
+    events: appendEvent(
+      state.events,
+      {
+        payload: { reason, taskId },
+        timestamp: lostAt,
+        type: "task_lost",
+      },
+      state.resourcePolicy.maxTrackedEvents,
+    ),
+    lastError: reason,
+    status: "idle",
+    tasks: pruneTasks(
+      state.tasks.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              completedAt: lostAt,
+              lastError: reason,
+              status: "lost",
+              updatedAt: lostAt,
+            }
+          : task,
+      ),
+      state.resourcePolicy.maxTrackedFinishedTasks,
+    ),
+    updatedAt: lostAt,
+  };
+}
+
+export function reconcileAgentState(
+  state: AgentDaemonState,
+  now = new Date(),
+): AgentDaemonState {
+  if (state.activeRun) {
+    return state;
+  }
+  const staleRunning = state.tasks.find((task) => {
+    if (task.status !== "running" || !task.startedAt) {
+      return false;
+    }
+    return (
+      now.getTime() - new Date(task.startedAt).getTime() >
+      state.resourcePolicy.heartbeatTtlMs * 2
+    );
+  });
+  return staleRunning
+    ? markTaskLost(
+        state,
+        staleRunning.id,
+        "task was running without an active runtime owner",
+        now.toISOString(),
+      )
+    : state;
 }
 
 export function markTaskRetry(

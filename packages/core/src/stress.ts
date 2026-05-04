@@ -1,6 +1,23 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
-import type { FailureMode, StressRun, StressScenario } from "./types.js";
+import {
+  buildDefaultDaemonState,
+  markTaskCompleted,
+  markTaskRunning,
+} from "./agent.js";
+import { FileCronStore } from "./cron.js";
+import { writeJson } from "./fs.js";
+import { JsonMemoryStore, sweepMemory } from "./memory.js";
+import { resolveProjectStateRoot } from "./session.js";
+import type {
+  FailureMode,
+  HarnessStressCheck,
+  HarnessStressReport,
+  ProviderName,
+  StressRun,
+  StressScenario,
+} from "./types.js";
 
 export function defaultStressScenarios(projectKey: string): StressScenario[] {
   return [
@@ -127,4 +144,147 @@ export function advanceStressRun(
       ? "completed"
       : "running";
   return next;
+}
+
+function check(
+  checks: HarnessStressCheck[],
+  name: string,
+  passed: boolean,
+  detail: string,
+): void {
+  checks.push({ detail, name, passed });
+}
+
+export async function runHarnessStressGauntlet(
+  projectRoot: string,
+  projectKey: string,
+  provider: ProviderName,
+): Promise<HarnessStressReport> {
+  const checks: HarnessStressCheck[] = [];
+  const stateRoot = resolveProjectStateRoot(projectRoot);
+  const timestamp = new Date().toISOString();
+
+  const memory = new JsonMemoryStore(stateRoot);
+  await memory.add({
+    confidence: 0.95,
+    content: "Latte cron jobs must not duplicate queued isolated sessions.",
+    kind: "policy",
+    metadata: { gauntlet: true },
+    namespace: projectKey,
+    provenance: ["stress:extreme"],
+  });
+  await memory.add({
+    confidence: 0.95,
+    content: "Latte cron jobs must not duplicate queued isolated sessions.",
+    kind: "policy",
+    metadata: { gauntlet: true, duplicate: true },
+    namespace: projectKey,
+    provenance: ["stress:extreme"],
+  });
+  await memory.add({
+    confidence: 0.2,
+    content: "Expired connector token should be pruned.",
+    freshnessTtlSeconds: 1,
+    kind: "episodic",
+    metadata: { gauntlet: true },
+    namespace: projectKey,
+    provenance: ["stress:extreme"],
+  });
+  const sweep = await sweepMemory(stateRoot, projectKey, {
+    maxPromoted: 10,
+    minScore: 0.2,
+    now: new Date(Date.now() + 5_000),
+  });
+  check(
+    checks,
+    "memory-sweep-prunes-and-promotes",
+    sweep.expired >= 1 &&
+      sweep.retained < sweep.inputItems &&
+      sweep.promoted >= 1,
+    `input=${sweep.inputItems} retained=${sweep.retained} promoted=${sweep.promoted} expired=${sweep.expired}`,
+  );
+
+  const cron = new FileCronStore(projectRoot);
+  const first = await cron.addJob({
+    name: "gauntlet-isolated-a",
+    prompt: "Simulate cron isolated task A",
+    schedule: { at: timestamp, kind: "at" },
+    sessionTarget: { kind: "isolated" },
+    tags: ["gauntlet"],
+  });
+  const second = await cron.addJob({
+    name: "gauntlet-isolated-b",
+    prompt: "Simulate cron isolated task B",
+    schedule: { at: timestamp, kind: "at" },
+    sessionTarget: { kind: "isolated" },
+    tags: ["gauntlet"],
+  });
+  let state = buildDefaultDaemonState(projectKey, provider);
+  const tick = await cron.enqueueDueJobs(state, {
+    maxConcurrentRuns: 1,
+    now: new Date(timestamp),
+    projectKey,
+    provider,
+  });
+  state = tick.state;
+  check(
+    checks,
+    "cron-enforces-concurrency",
+    tick.enqueued.length === 1 && tick.skipped.length === 1,
+    `enqueued=${tick.enqueued.length} skipped=${tick.skipped.length}`,
+  );
+  check(
+    checks,
+    "cron-isolated-session-key",
+    tick.enqueued[0]?.sessionKey.startsWith(`cron:${first.id}`) === true ||
+      tick.enqueued[0]?.sessionKey.startsWith(`cron:${second.id}`) === true,
+    `sessionKey=${tick.enqueued[0]?.sessionKey ?? "missing"}`,
+  );
+
+  const task = state.tasks.find(
+    (candidate) => candidate.origin?.kind === "cron",
+  );
+  if (task) {
+    state = markTaskRunning(
+      state,
+      task.id,
+      new Date(Date.now() + 1_000).toISOString(),
+    );
+    state = markTaskCompleted(
+      state,
+      task.id,
+      new Date(Date.now() + 2_000).toISOString(),
+    );
+    await cron.reconcileWithAgentState(state);
+  }
+  const runs = await cron.listRuns();
+  await cron.removeJob(first.id);
+  await cron.removeJob(second.id);
+  check(
+    checks,
+    "cron-reconciles-run-ledger",
+    runs.some((run) => run.status === "succeeded") &&
+      runs.some((run) => run.status === "skipped"),
+    `statuses=${runs.map((run) => run.status).join(",")}`,
+  );
+
+  const passed = checks.filter((entry) => entry.passed).length;
+  const report: HarnessStressReport = {
+    checks,
+    generatedAt: new Date().toISOString(),
+    projectKey,
+    scenario: "extreme-harness-gauntlet",
+    summary: {
+      failed: checks.length - passed,
+      passed,
+      total: checks.length,
+    },
+  };
+  const reportPath = path.join(
+    stateRoot,
+    "stress",
+    `extreme-harness-gauntlet-${randomUUID()}.json`,
+  );
+  await writeJson(reportPath, { ...report, reportPath });
+  return { ...report, reportPath };
 }

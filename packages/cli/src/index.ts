@@ -23,12 +23,14 @@ import {
   createAgentCommand,
   createCacheKey,
   createStressRun,
+  buildCronSchedule,
   discoverGitProjects,
   discoverWorkspaceRoot,
   detectTransientFailureSignature,
   defaultStressScenarios,
   ensureDir,
   FileAgentStore,
+  FileCronStore,
   FileSessionStore,
   installWorkspaceSkill,
   inspectWorkspaceState,
@@ -40,16 +42,20 @@ import {
   markTaskRetry,
   markTaskRunning,
   noteResourceAssessment,
+  parseCronSessionTarget,
   queryWorkspaceState,
   readWorkspaceSnapshot,
   readJson,
   readManagedAuth,
+  reconcileAgentState,
   renderWorkspaceBrief,
   renderPromptEnvelope,
   resolveProjectStateRoot,
+  runHarnessStressGauntlet,
   runWorkspaceExecPlan,
   saveManagedAuth,
   selectRunnableTask,
+  sweepMemory,
   workspaceCli,
   workspaceManifestPath,
   workspaceProjects,
@@ -273,6 +279,17 @@ async function resolveSessionForTask(
   cacheKey: string,
 ): Promise<SessionRecord> {
   const sessions = new FileSessionStore(projectRoot);
+  if (task.sessionKey) {
+    return sessions.getOrCreateByKey(
+      config.namespace,
+      task.provider,
+      cacheKey,
+      task.sessionKey,
+      {
+        origin: task.origin ?? { kind: "manual" },
+      },
+    );
+  }
   if (task.sessionId) {
     const existing = await sessions.get(task.sessionId);
     if (existing) {
@@ -613,6 +630,7 @@ async function ensureDaemonRunning(
 async function runAgentDaemon(projectRoot: string, provider?: ProviderName) {
   const config = await loadLatteConfig(projectRoot);
   const store = new FileAgentStore(projectRoot);
+  const cronStore = new FileCronStore(projectRoot);
   let state = await store.ensureState(
     config.namespace,
     provider ?? config.providers.default,
@@ -664,6 +682,8 @@ async function runAgentDaemon(projectRoot: string, provider?: ProviderName) {
     }
 
     state = await finalizeBackgroundTask(projectRoot, config, state);
+    state = reconcileAgentState(state, now);
+    await cronStore.reconcileWithAgentState(state);
 
     if (
       !state.activeRun &&
@@ -671,6 +691,15 @@ async function runAgentDaemon(projectRoot: string, provider?: ProviderName) {
       state.status !== "stopping" &&
       state.lastResourceAssessment?.allowed !== false
     ) {
+      if (process.env.LATTE_SKIP_CRON !== "1") {
+        state = (
+          await cronStore.enqueueDueJobs(state, {
+            now,
+            projectKey: config.namespace,
+            provider: state.provider,
+          })
+        ).state;
+      }
       const nextTask = selectRunnableTask(state, now);
       if (nextTask) {
         try {
@@ -1049,6 +1078,246 @@ memory
     console.log(JSON.stringify(results, null, 2));
   });
 
+memory
+  .command("sweep")
+  .requiredOption("--project <path>", "Target project root")
+  .option("--max-promoted <n>", "Maximum memories to promote", "40")
+  .option("--min-score <n>", "Promotion score threshold", "0.4")
+  .action(
+    async ({
+      maxPromoted,
+      minScore,
+      project,
+    }: {
+      maxPromoted: string;
+      minScore: string;
+      project: string;
+    }) => {
+      const projectRoot = path.resolve(project);
+      const config = await loadLatteConfig(projectRoot);
+      const report = await sweepMemory(
+        resolveProjectStateRoot(projectRoot),
+        config.namespace,
+        {
+          maxPromoted: Number.parseInt(maxPromoted, 10) || 40,
+          minScore: Number.parseFloat(minScore),
+        },
+      );
+      console.log(JSON.stringify(report, null, 2));
+    },
+  );
+
+const sessionsCommand = program
+  .command("sessions")
+  .description("Inspect durable Latte sessions");
+
+sessionsCommand
+  .command("list")
+  .requiredOption("--project <path>", "Target project root")
+  .option("--json", "Print JSON")
+  .action(async ({ json, project }: { json?: boolean; project: string }) => {
+    const sessions = await new FileSessionStore(path.resolve(project)).list();
+    if (json) {
+      console.log(JSON.stringify(sessions, null, 2));
+      return;
+    }
+    for (const session of sessions) {
+      console.log(
+        `${session.id}\t${session.sessionKey ?? "-"}\t${session.provider}\t${session.updatedAt}`,
+      );
+    }
+  });
+
+sessionsCommand
+  .command("show")
+  .requiredOption("--project <path>", "Target project root")
+  .argument("<idOrKey>")
+  .action(async (idOrKey: string, { project }: { project: string }) => {
+    const store = new FileSessionStore(path.resolve(project));
+    const session =
+      (await store.get(idOrKey)) ?? (await store.getByKey(idOrKey));
+    if (!session) {
+      throw new Error(`Session not found: ${idOrKey}`);
+    }
+    console.log(JSON.stringify(session, null, 2));
+  });
+
+sessionsCommand
+  .command("compact")
+  .requiredOption("--project <path>", "Target project root")
+  .argument("<idOrKey>")
+  .action(async (idOrKey: string, { project }: { project: string }) => {
+    const projectRoot = path.resolve(project);
+    const config = await loadLatteConfig(projectRoot);
+    const sessions = new FileSessionStore(projectRoot);
+    const session =
+      (await sessions.get(idOrKey)) ?? (await sessions.getByKey(idOrKey));
+    if (!session) {
+      throw new Error(`Session not found: ${idOrKey}`);
+    }
+    const summary = session.events
+      .slice(-20)
+      .map(
+        (event) =>
+          `${event.timestamp} ${event.type}: ${JSON.stringify(event.payload)}`,
+      )
+      .join("\n");
+    const memory = await new JsonMemoryStore(
+      resolveProjectStateRoot(projectRoot),
+    ).add({
+      confidence: 0.65,
+      content: [
+        `Session compacted: ${session.sessionKey ?? session.id}`,
+        "",
+        summary,
+      ].join("\n"),
+      kind: "episodic",
+      metadata: {
+        sessionId: session.id,
+        sessionKey: session.sessionKey ?? null,
+      },
+      namespace: config.namespace,
+      provenance: ["latte sessions compact"],
+    });
+    await sessions.appendEvent(session.id, {
+      payload: { memoryId: memory.id },
+      timestamp: new Date().toISOString(),
+      type: "session_compacted_to_memory",
+    });
+    console.log(JSON.stringify(memory, null, 2));
+  });
+
+const cron = program
+  .command("cron")
+  .description("Durable scheduled agent jobs");
+
+cron
+  .command("add")
+  .requiredOption("--project <path>", "Target project root")
+  .requiredOption("--name <name>", "Job name")
+  .option("--at <iso>", "One-shot timestamp")
+  .option("--every <duration>", "Fixed interval, e.g. 30m or 6h")
+  .option("--session <target>", "main, isolated, or session:<key>", "isolated")
+  .option("--provider <provider>", "Provider override")
+  .option("--tag <tags>", "Comma-separated tags")
+  .option("--delete-after-run", "Delete one-shot job after successful run")
+  .argument("<prompt...>")
+  .action(
+    async (
+      promptParts: string[],
+      {
+        at,
+        deleteAfterRun,
+        every,
+        name,
+        project,
+        provider,
+        session,
+        tag,
+      }: {
+        at?: string;
+        deleteAfterRun?: boolean;
+        every?: string;
+        name: string;
+        project: string;
+        provider?: ProviderName;
+        session: string;
+        tag?: string;
+      },
+    ) => {
+      const store = new FileCronStore(path.resolve(project));
+      const scheduleInput: { at?: string; every?: string } = {};
+      if (at) {
+        scheduleInput.at = at;
+      }
+      if (every) {
+        scheduleInput.every = every;
+      }
+      const options: {
+        deleteAfterRun?: boolean;
+        name: string;
+        prompt: string;
+        provider?: ProviderName;
+        schedule: ReturnType<typeof buildCronSchedule>;
+        sessionTarget: ReturnType<typeof parseCronSessionTarget>;
+        tags?: string[];
+      } = {
+        name,
+        prompt: promptParts.join(" "),
+        schedule: buildCronSchedule(scheduleInput),
+        sessionTarget: parseCronSessionTarget(session),
+      };
+      if (deleteAfterRun !== undefined) {
+        options.deleteAfterRun = deleteAfterRun;
+      }
+      if (provider) {
+        options.provider = provider;
+      }
+      const tags = workspaceCli.splitCsv(tag);
+      if (tags) {
+        options.tags = tags;
+      }
+      console.log(JSON.stringify(await store.addJob(options), null, 2));
+    },
+  );
+
+cron
+  .command("list")
+  .requiredOption("--project <path>", "Target project root")
+  .option("--json", "Print JSON")
+  .action(async ({ json, project }: { json?: boolean; project: string }) => {
+    const jobs = await new FileCronStore(path.resolve(project)).listJobs();
+    if (json) {
+      console.log(JSON.stringify(jobs, null, 2));
+      return;
+    }
+    for (const job of jobs) {
+      console.log(
+        `${job.id}\t${job.enabled ? "enabled" : "disabled"}\t${job.nextRunAt}\t${job.name}`,
+      );
+    }
+  });
+
+cron
+  .command("run")
+  .requiredOption("--project <path>", "Target project root")
+  .argument("<jobId>")
+  .action(async (jobId: string, { project }: { project: string }) => {
+    const projectRoot = path.resolve(project);
+    const store = new FileCronStore(projectRoot);
+    const job = await store.forceDue(jobId);
+    if (!job) {
+      throw new Error(`Cron job not found: ${jobId}`);
+    }
+    await ensureDaemonRunning(projectRoot);
+    console.log(JSON.stringify(job, null, 2));
+  });
+
+cron
+  .command("runs")
+  .requiredOption("--project <path>", "Target project root")
+  .option("--id <jobId>", "Filter by job id")
+  .action(async ({ id, project }: { id?: string; project: string }) => {
+    console.log(
+      JSON.stringify(
+        await new FileCronStore(path.resolve(project)).listRuns(id),
+        null,
+        2,
+      ),
+    );
+  });
+
+cron
+  .command("remove")
+  .requiredOption("--project <path>", "Target project root")
+  .argument("<jobId>")
+  .action(async (jobId: string, { project }: { project: string }) => {
+    const removed = await new FileCronStore(path.resolve(project)).removeJob(
+      jobId,
+    );
+    console.log(JSON.stringify({ jobId, removed }, null, 2));
+  });
+
 const stress = program
   .command("stress")
   .description("Stress scenarios and recovery drills");
@@ -1089,6 +1358,23 @@ stress
       console.log(JSON.stringify(run, null, 2));
     },
   );
+
+stress
+  .command("extreme")
+  .requiredOption("--project <path>", "Target project root")
+  .action(async ({ project }: { project: string }) => {
+    const projectRoot = path.resolve(project);
+    const config = await loadLatteConfig(projectRoot);
+    const report = await runHarnessStressGauntlet(
+      projectRoot,
+      config.namespace,
+      config.providers.default,
+    );
+    console.log(JSON.stringify(report, null, 2));
+    if (report.summary.failed > 0) {
+      process.exitCode = 1;
+    }
+  });
 
 const workspace = program
   .command("workspace")
