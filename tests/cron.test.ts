@@ -12,6 +12,50 @@ import {
 } from "../packages/core/src/index.js";
 
 describe("cron manager", () => {
+  test("keeps concurrent job registrations", async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), "latte-cron-"));
+    const store = new FileCronStore(projectRoot);
+
+    await Promise.all(
+      Array.from({ length: 20 }, async (_, index) =>
+        store.addJob({
+          name: `job-${index}`,
+          prompt: `run job ${index}`,
+          schedule: { everyMs: 60_000, kind: "interval" },
+          sessionTarget: { kind: "isolated" },
+        }),
+      ),
+    );
+
+    await expect(store.listJobs()).resolves.toHaveLength(20);
+  });
+
+  test("claims a due one-shot job only once under concurrent ticks", async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), "latte-cron-"));
+    const store = new FileCronStore(projectRoot);
+    const now = new Date("2026-05-04T00:00:00.000Z");
+    await store.addJob({
+      name: "singleton",
+      prompt: "run once",
+      schedule: { at: now.toISOString(), kind: "at" },
+      sessionTarget: { kind: "isolated" },
+    });
+
+    const ticks = await Promise.all(
+      Array.from({ length: 4 }, async () =>
+        store.enqueueDueJobs(buildDefaultDaemonState("demo", "codex"), {
+          maxConcurrentRuns: 4,
+          now,
+          projectKey: "demo",
+          provider: "codex",
+        }),
+      ),
+    );
+
+    expect(ticks.flatMap((tick) => tick.enqueued)).toHaveLength(1);
+    await expect(store.listRuns()).resolves.toHaveLength(1);
+  });
+
   test("enqueues due jobs with isolated session keys and reconciles runs", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "latte-cron-"));
     const store = new FileCronStore(projectRoot);

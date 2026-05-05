@@ -41,7 +41,24 @@ Latte now has native equivalents:
 - `sweepMemory` deduplicates, TTL-prunes, scores, and promotes memory into
   `.latte/memory/MEMORY.md` with review metadata under `.latte/memory/.dreams/`.
 - `latte stress extreme` runs a deterministic gauntlet covering cron pressure,
-  isolated sessions, run reconciliation, and memory sweep behavior.
+  isolated sessions, run reconciliation, memory sweep behavior, and local state
+  corruption/contention recovery.
+
+## Durable State
+
+Latte uses a local file-backed control plane today, so the production bar is
+not "write JSON and hope." State mutation paths use:
+
+- per-file lock directories with stale-lock reclamation for crashed writers
+- atomic temp-file writes followed by rename
+- best-effort file and directory fsync before state becomes visible
+- `.bak` recovery when a primary JSON file is missing or corrupt
+- lock-guarded read-modify-write helpers for cron, session indexes, memory, and
+  agent registry updates
+
+The goal is deterministic local resilience before introducing a managed hosted
+service. The same semantics map cleanly to Postgres row locks, advisory locks,
+and workflow leases later.
 
 ## Guardrails
 
@@ -74,6 +91,9 @@ The minimum acceptable stress bar is not "unit tests pass." It is:
 
 - no duplicate cron run when multiple due jobs collide with concurrency limits
 - no session amnesia for named cron/session keys
+- no lost JSON updates under concurrent CLI/daemon writes
+- recovery from corrupt primary state using the last good backup
+- stale lock reclamation after a crashed writer
 - no stuck active run after provider crash or orphaned task state
 - memory sweep produces a human-reviewable vault
 - daemon continues running after the gauntlet

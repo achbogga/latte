@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { ensureDir, readJson, writeJson, writeText } from "./fs.js";
+import { ensureDir, readJson, updateJson, writeJson, writeText } from "./fs.js";
 import type { MemoryItem, MemorySweepReport, RetrievalHit } from "./types.js";
 
 function lexicalScore(query: string, content: string): number {
@@ -24,14 +24,15 @@ export class JsonMemoryStore {
   }
 
   async add(item: Omit<MemoryItem, "createdAt" | "id">): Promise<MemoryItem> {
-    const current = await this.list(item.namespace);
     const record: MemoryItem = {
       ...item,
       createdAt: new Date().toISOString(),
       id: randomUUID(),
     };
-    current.push(record);
-    await writeJson(this.filePath, current);
+    await updateJson<MemoryItem[]>(this.filePath, [], (current) => [
+      ...current,
+      record,
+    ]);
     return record;
   }
 
@@ -44,8 +45,7 @@ export class JsonMemoryStore {
     namespace: string,
     items: MemoryItem[],
   ): Promise<void> {
-    const all = await readJson<MemoryItem[]>(this.filePath, []);
-    await writeJson(this.filePath, [
+    await updateJson<MemoryItem[]>(this.filePath, [], (all) => [
       ...all.filter((item) => item.namespace !== namespace),
       ...items,
     ]);

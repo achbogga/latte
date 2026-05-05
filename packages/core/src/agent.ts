@@ -3,7 +3,7 @@ import { readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { ensureDir, readJson, writeJson } from "./fs.js";
+import { ensureDir, readJson, updateJson, writeJson } from "./fs.js";
 import { resolveLatteHome, resolveProjectStateRoot } from "./session.js";
 import type {
   AgentCommand,
@@ -714,25 +714,25 @@ export class FileAgentStore {
   async updateRegistry(
     entry: AgentRegistryEntry,
   ): Promise<AgentRegistryEntry[]> {
-    const current = await readJson<AgentRegistryEntry[]>(this.registryPath, []);
-    const next = current
-      .filter((candidate) => candidate.projectKey !== entry.projectKey)
-      .concat(entry);
-    await writeJson(this.registryPath, next);
-    return next;
+    return updateJson<AgentRegistryEntry[]>(this.registryPath, [], (current) =>
+      current
+        .filter((candidate) => candidate.projectKey !== entry.projectKey)
+        .concat(entry),
+    );
   }
 
   async listPeerAgents(selfProjectKey: string): Promise<AgentRegistryEntry[]> {
-    const current = await readJson<AgentRegistryEntry[]>(this.registryPath, []);
     const now = Date.now();
-    const live = current.filter(
-      (entry) =>
-        now - new Date(entry.heartbeatAt).getTime() <=
-        buildDefaultResourcePolicy().heartbeatTtlMs * 2,
-    );
-    if (live.length !== current.length) {
-      await writeJson(this.registryPath, live);
-    }
-    return live.filter((entry) => entry.projectKey !== selfProjectKey);
+    let peers: AgentRegistryEntry[] = [];
+    await updateJson<AgentRegistryEntry[]>(this.registryPath, [], (current) => {
+      const live = current.filter(
+        (entry) =>
+          now - new Date(entry.heartbeatAt).getTime() <=
+          buildDefaultResourcePolicy().heartbeatTtlMs * 2,
+      );
+      peers = live.filter((entry) => entry.projectKey !== selfProjectKey);
+      return live;
+    });
+    return peers;
   }
 }

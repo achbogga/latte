@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
-import { ensureDir, readJson, writeJson } from "./fs.js";
+import { ensureDir, readJson, updateJson, writeJson } from "./fs.js";
 import type { ProviderName, SessionEvent, SessionRecord } from "./types.js";
 
 interface AuthRecord {
@@ -103,11 +103,14 @@ export class FileSessionStore {
     };
     const filePath = path.join(this.sessionsRoot, `${normalized.id}.json`);
     await writeJson(filePath, normalized);
-    const sessions = (await this.list()).filter(
-      (entry) => entry.id !== normalized.id,
+    await updateJson<SessionRecord[]>(
+      path.join(this.sessionsRoot, "index.json"),
+      [],
+      (sessions) => [
+        ...sessions.filter((entry) => entry.id !== normalized.id),
+        normalized,
+      ],
     );
-    sessions.push(normalized);
-    await writeJson(path.join(this.sessionsRoot, "index.json"), sessions);
   }
 
   async appendEvent(id: string, event: SessionEvent): Promise<SessionRecord> {

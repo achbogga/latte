@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -7,7 +8,7 @@ import {
   markTaskRunning,
 } from "./agent.js";
 import { FileCronStore } from "./cron.js";
-import { writeJson } from "./fs.js";
+import { readJson, updateJson, writeJson } from "./fs.js";
 import { JsonMemoryStore, sweepMemory } from "./memory.js";
 import { resolveProjectStateRoot } from "./session.js";
 import type {
@@ -163,6 +164,48 @@ export async function runHarnessStressGauntlet(
   const checks: HarnessStressCheck[] = [];
   const stateRoot = resolveProjectStateRoot(projectRoot);
   const timestamp = new Date().toISOString();
+  const chaosRoot = path.join(stateRoot, "stress", "chaos");
+
+  const counterPath = path.join(chaosRoot, "counter.json");
+  await Promise.all(
+    Array.from({ length: 32 }, async () =>
+      updateJson(counterPath, { count: 0 }, (current) => ({
+        count: current.count + 1,
+      })),
+    ),
+  );
+  const counter = await readJson(counterPath, { count: 0 });
+  check(
+    checks,
+    "durable-state-serializes-concurrent-writes",
+    counter.count === 32,
+    `count=${counter.count}`,
+  );
+
+  const corruptPath = path.join(chaosRoot, "corrupt-primary.json");
+  await writeJson(corruptPath, { generation: 1 });
+  await writeJson(corruptPath, { generation: 2 });
+  await writeFile(corruptPath, "{corrupt", "utf8");
+  const recovered = await readJson(corruptPath, { generation: 0 });
+  check(
+    checks,
+    "durable-state-recovers-from-backup",
+    recovered.generation === 1,
+    `generation=${recovered.generation}`,
+  );
+
+  const lockedPath = path.join(chaosRoot, "stale-lock.json");
+  await mkdir(`${lockedPath}.lock`, { recursive: true });
+  const oldLockTime = new Date(Date.now() - 180_000);
+  await utimes(`${lockedPath}.lock`, oldLockTime, oldLockTime);
+  await writeJson(lockedPath, { ok: true });
+  const staleLockRecovered = await readJson(lockedPath, { ok: false });
+  check(
+    checks,
+    "durable-state-reclaims-stale-lock",
+    staleLockRecovered.ok,
+    `ok=${String(staleLockRecovered.ok)}`,
+  );
 
   const memory = new JsonMemoryStore(stateRoot);
   await memory.add({

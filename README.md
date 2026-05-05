@@ -19,6 +19,8 @@ session resume, and durable multi-day automation.
 - thin consumer integration configs for `boba` and `tsqbev-poc`
 - GitKB-inspired multi-repo workspace alpha with guarded batch execution
 - OpenClaw-inspired cron, session, memory-sweep, and extreme stress primitives
+- atomic local state writes with file locks, backup recovery, stale-lock cleanup,
+  and contention tests
 
 ## Install
 
@@ -110,7 +112,8 @@ Latte now includes an OpenClaw-inspired local control plane:
 - `latte memory sweep` deduplicates, TTL-prunes, and promotes memory into
   `.latte/memory/MEMORY.md`.
 - `latte stress extreme` runs the deterministic gauntlet for cron pressure,
-  session continuity, run reconciliation, and memory sweeps.
+  session continuity, run reconciliation, memory sweeps, and durable-state
+  corruption/contention recovery.
 
 See
 [docs/architecture/openclaw-inspired-harness.md](docs/architecture/openclaw-inspired-harness.md).
