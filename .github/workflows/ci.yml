@@ -12,11 +12,11 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.0.5
         with:
           version: 10.33.0
       - name: Install
@@ -24,9 +24,10 @@ jobs:
       - name: Expose Local Toolchain
         run: echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Trunk Check
-        uses: trunk-io/trunk-action@v1
+        uses: trunk-io/trunk-action@v1.2.4
         with:
           arguments: --all --no-progress
+          cache: false
       - name: Lint
         run: |
           pnpm lint
